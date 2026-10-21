@@ -1,0 +1,341 @@
+1. Behavior Definition code
+
+managed implementation in class ZBP_R_ATS_AB_EQUIP unique;
+strict ( 2 );
+with draft;
+extensible;
+define behavior for ZR_ATS_AB_EQUIP alias ZrAtsAbEquip
+persistent table ZATS_AB_EQUIP
+extensible
+draft table ZATS_AB_EQUIP_D
+etag master LocalLastChangedAt
+lock master total etag LastChangedAt
+authorization master( global )
+with additional save with full data
+{
+  field ( readonly )
+   OrderUUID,
+   LocalCreatedBy,
+   LocalCreatedAt,
+   LocalLastChangedBy,
+   LocalLastChangedAt,
+   LastChangedAt;
+
+  field ( numbering : managed )
+   OrderUUID;
+
+  action (features : instance) approveRequest result [1] $self;
+
+
+  create;
+  update;
+  delete;
+
+  event eqip_req_accepted parameter ZA_ATS_AB_EQUIPMENT;
+
+  draft action Activate optimized;
+  draft action Discard;
+  draft action Edit;
+  draft action Resume;
+  draft determine action Prepare;
+
+  mapping for ZATS_AB_EQUIP corresponding extensible
+  {
+    OrderUUID = ORDER_UUID;
+    ItemText = ITEM_TEXT;
+    CategoryID = CATEGORY_ID;
+    SupplierName = SUPPLIER_NAME;
+    UnitPrice = UNIT_PRICE;
+    CurrencyCode = CURRENCY_CODE;
+    Quantity = QUANTITY;
+    DeliveryDate = DELIVERY_DATE;
+    OverallStatus = OVERALL_STATUS;
+    Review = REVIEW;
+    LocalCreatedBy = LOCAL_CREATED_BY;
+    LocalCreatedAt = LOCAL_CREATED_AT;
+    LocalLastChangedBy = LOCAL_LAST_CHANGED_BY;
+    LocalLastChangedAt = LOCAL_LAST_CHANGED_AT;
+    LastChangedAt = LAST_CHANGED_AT;
+  }
+
+}
+
+
+2. Entity
+
+@AccessControl.authorizationCheck: #MANDATORY
+@Metadata.allowExtensions: true
+@ObjectModel.sapObjectNodeType.name: 'ZATS_AB_EQUIP'
+@EndUserText.label: 'Equipment Request'
+define root view entity ZR_ATS_AB_EQUIP
+  as select from zats_ab_equip
+  association [0..1] to ZATS_AB_PRODCAT as _Category on $projection.CategoryId    = _Category.Value
+  association [0..1] to ZATS_AB_COMPANY as _Supplier on $projection.SupplierName  = _Supplier.Value
+  association [0..1] to ZATS_AB_STATUS  as _Status   on $projection.OverallStatus = _Status.Value
+{
+      @EndUserText.label: 'Order UUID'
+  key order_uuid            as OrderUUID,
+      @EndUserText.label: 'Item Name'
+      item_text             as ItemText,
+      @EndUserText.label: 'Product Category'
+      @ObjectModel.text.element: [ 'CategoryText' ]
+      @Consumption.valueHelpDefinition: [{ entity: { name: 'ZATS_AB_PRODCAT', element: 'Value' },
+                                         useForValidation: true }]
+      category_id           as CategoryId,
+      @EndUserText.label: 'Category Text'
+      _Category.Description as CategoryText,
+
+      @EndUserText.label: 'Supplier Name'
+      @ObjectModel.text.element: [ 'SupplierText' ]
+      @Consumption.valueHelpDefinition: [{ entity: { name: 'ZATS_AB_COMPANY', element: 'Value' },
+                                           useForValidation: true }]
+      supplier_name         as SupplierName,
+      @EndUserText.label: 'Supplier Text'
+      _Supplier.Description as SupplierText,
+
+      @EndUserText.label: 'Unit Price'
+      @Semantics.amount.currencyCode: 'CurrencyCode'
+      unit_price            as UnitPrice,
+      @EndUserText.label: 'Currency'
+      @Consumption.valueHelpDefinition: [ {
+        entity.name: 'I_CurrencyStdVH',
+        entity.element: 'Currency',
+        useForValidation: true
+      } ]
+
+
+      currency_code         as CurrencyCode,
+      @EndUserText.label: 'Quantity'
+      quantity              as Quantity,
+      @EndUserText.label: 'Delivery Date'
+      delivery_date         as DeliveryDate,
+      @EndUserText.label: 'Overall Status'
+      @ObjectModel.text.element: [ 'StatusText' ]
+      @Consumption.valueHelpDefinition: [{ entity: { name: 'ZATS_AB_STATUS', element: 'Value' },
+                                         useForValidation: true }]
+      overall_status        as OverallStatus,
+      @EndUserText.label: 'Status Text'
+      _Status.Description   as StatusText,
+      @EndUserText.label: 'Review'
+      review                as Review,
+      @EndUserText.label: 'Created By'
+      @Semantics.user.createdBy: true
+      local_created_by      as LocalCreatedBy,
+      @EndUserText.label: 'Created At'
+      @Semantics.systemDateTime.createdAt: true
+      local_created_at      as LocalCreatedAt,
+      @EndUserText.label: 'Last Changed By'
+      @Semantics.user.localInstanceLastChangedBy: true
+      local_last_changed_by as LocalLastChangedBy,
+      @EndUserText.label: 'Local Last Changed At'
+      @Semantics.systemDateTime.localInstanceLastChangedAt: true
+      local_last_changed_at as LocalLastChangedAt,
+      @EndUserText.label: 'Last Changed At'
+      @Semantics.systemDateTime.lastChangedAt: true
+      last_changed_at       as LastChangedAt,
+
+      /* Associations */
+      _Category,
+      _Supplier,
+      _Status
+}
+
+
+3. Behavior Implementation
+
+CLASS lsc_zr_ats_ab_equip DEFINITION INHERITING FROM cl_abap_behavior_saver.
+
+  PROTECTED SECTION.
+
+    METHODS save_modified REDEFINITION.
+
+ENDCLASS.
+
+CLASS lsc_zr_ats_ab_equip IMPLEMENTATION.
+
+  METHOD save_modified.
+
+    DATA : events_to_be_raied type table for event ZR_ATS_AB_EQUIP~eqip_req_accepted.
+
+    "Raise the event whenever the status is changed
+    if update-zratsabequip is not initial.
+
+        LOOP at update-zratsabequip into data(update_equipment).
+
+            clear events_to_be_raied.
+
+            if update_equipment-%control-OverallStatus = if_abap_behv=>mk-on and
+                update_equipment-OverallStatus = 'A'.
+
+                append INITIAL LINE TO events_to_be_raied.
+                events_to_be_raied[ 1 ] = CORRESPONDING #( update_equipment
+                                                                mapping
+                                                                %key = %key
+                                                                order_uuid = OrderUUID ).
+                raise entity event ZR_ATS_AB_EQUIP~eqip_req_accepted from events_to_be_raied.
+
+            ENDIF.
+
+        endloop.
+
+    endif.
+
+
+  ENDMETHOD.
+
+ENDCLASS.
+
+CLASS LHC_ZR_ATS_AB_EQUIP DEFINITION INHERITING FROM CL_ABAP_BEHAVIOR_HANDLER.
+  PRIVATE SECTION.
+    METHODS:
+      GET_GLOBAL_AUTHORIZATIONS FOR GLOBAL AUTHORIZATION
+        IMPORTING
+           REQUEST requested_authorizations FOR ZrAtsAbEquip
+        RESULT result,
+      get_instance_features FOR INSTANCE FEATURES
+            keys REQUEST requested_features FOR ZrAtsAbEquip RESULT result.
+
+          METHODS approveRequest FOR MODIFY
+            keys FOR ACTION ZrAtsAbEquip~approveRequest RESULT result.
+ENDCLASS.
+
+CLASS LHC_ZR_ATS_AB_EQUIP IMPLEMENTATION.
+  METHOD GET_GLOBAL_AUTHORIZATIONS.
+  ENDMETHOD.
+  METHOD get_instance_features.
+
+  "Step 1: Read the travel data with status
+   READ ENTITIES OF ZR_ATS_AB_EQUIP in local mode
+       ENTITY ZrAtsAbEquip
+           FIELDS ( OrderUUID overallstatus  )
+           with     CORRESPONDING #( keys )
+       RESULT data(requests)
+       FAILED failed.
+
+   result = value #( for requestw in requests
+                       ( %tky = requestw-%tky
+                         %action-approveRequest = COND #( WHEN requestw-OverallStatus = 'A'
+                                                           then if_abap_behv=>fc-o-disabled
+                                                           else if_abap_behv=>fc-o-enabled
+                         )
+
+                       )
+                   ).
+
+  ENDMETHOD.
+
+  METHOD approveRequest.
+
+     ""Perform the change of BO instance to change status
+   MODIFY ENTITIES OF ZR_ATS_AB_EQUIP
+       ENTITY ZrAtsAbEquip
+           UPDATE FIELDS ( OverallStatus )
+           WITH VALUE #( for key in keys ( %tky = key-%tky
+                                           %is_draft = key-%is_draft
+                                           OverallStatus = 'A'
+            )  ).
+   ""Read the BO instance on which we want to make the changes
+   READ ENTITIES OF ZR_ATS_AB_EQUIP
+       ENTITY ZrAtsAbEquip
+           ALL FIELDS
+               WITH CORRESPONDING #( keys )
+                   RESULT data(lt_results).
+   result = value #( for travel in lt_results ( %tky = travel-%tky
+                                                %param = travel
+   ) ).
+
+  ENDMETHOD.
+
+ENDCLASS.
+
+4. Abstract Entity
+
+@EndUserText.label: 'Equipment Request'
+define abstract entity ZA_ATS_AB_EQUIPMENT
+{
+  order_uuid        : sysuuid_x16;
+  itemtext             : abap.char(40);
+  categoryid           : abap.char(1);
+  suppliername         : abap.char(10);
+  @Semantics.amount.currencyCode : 'currencycode'
+  unitprice            : abap.curr(13,2);
+  currencycode         : abap.cuky;
+  quantity              : abap.int4;
+  deliverydate         : abap.dats;
+  overallstatus        : abap.char(1);
+  review                : abap.string(0);
+  locallastchangedby : abp_locinst_lastchange_user;
+  locallastchangedat : abp_locinst_lastchange_tstmpl;
+    
+}
+
+
+5. DB Table to store data
+
+@EndUserText.label : 'Status Tracker table for equip'
+@AbapCatalog.enhancement.category : #NOT_EXTENSIBLE
+@AbapCatalog.tableCategory : #TRANSPARENT
+@AbapCatalog.deliveryClass : #A
+@AbapCatalog.dataMaintenance : #RESTRICTED
+define table zats_ab_status_t {
+
+  key client    : abap.clnt not null;
+  key uuid      : sysuuid_x16 not null;
+  order_uuid    : sysuuid_x16 not null;
+  item_text     : abap.char(40);
+  category_id   : abap.char(1);
+  supplier_name : abap.char(10);
+  @Semantics.amount.currencyCode : 'zats_ab_status_t.currency_code'
+  total_cost    : abap.curr(15,2);
+  currency_code : abap.cuky;
+
+}
+
+6. Event Handler Class code
+
+*"* use this source file for the definition and implementation of
+*"* local helper classes, interface definitions and type
+*"* declarations
+class lcl_equipment DEFINITION INHERITING FROM cl_abap_behavior_event_handler.
+
+    PRIVATE SECTION.
+        methods get_uuid RETURNING VALUE(uuid) type sysuuid_x16.
+        methods on_request_accepted for entity event
+            accepted for ZrAtsAbEquip~eqip_req_accepted.
+
+ENDCLASS.
+
+CLASS lcl_equipment IMPLEMENTATION.
+
+  METHOD get_uuid.
+    try.
+        uuid = cl_system_uuid=>create_uuid_x16_static(  ).
+    catch cx_uuid_error.
+    endtry.
+  ENDMETHOD.
+
+  METHOD on_request_accepted.
+
+    "Close the active modify phase
+    cl_abap_tx=>save(  ).
+
+    "loop over the transffered data from event and insert in our table
+    LOOP at accepted REFERENCE INTO data(lr_accepted).
+
+        data lr_equip_accepted type zats_ab_status_t.
+        data lr_abs_equip  type ZA_ATS_AB_EQUIPMENT.
+        MOVE-CORRESPONDING lr_accepted->* to lr_abs_equip.
+        lr_equip_accepted-uuid = get_uuid( ).
+        lr_equip_accepted-total_cost = lr_abs_equip-quantity * lr_abs_equip-unitprice.
+        lr_equip_accepted-category_id = lr_abs_equip-categoryid.
+        lr_equip_accepted-currency_code = lr_abs_equip-currencycode.
+        lr_equip_accepted-supplier_name = lr_abs_equip-suppliername.
+        lr_equip_accepted-item_text = lr_abs_equip-itemtext.
+        lr_equip_accepted-order_uuid = lr_abs_equip-order_uuid.
+        insert zats_ab_status_t from @lr_equip_accepted.
+
+    ENDLOOP.
+
+  ENDMETHOD.
+
+ENDCLASS.
